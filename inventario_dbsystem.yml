@@ -1,0 +1,44 @@
+---
+- name: Generar inventario CSV detallado de Bases de Datos OCI (CDB y PDB)
+  hosts: localhost
+  connection: local
+  
+  vars:
+    tenancy_ocid: "ocid1.tenancy.oc1..aaaaaaaadubbgctqd2ycibpstffwccwb4m4xfcccbfjhu3yldelqprhfzuxq"
+    output_csv_file: "inventario_bases_de_datos.csv"
+
+  tasks:
+    - name: Paso 1 - Obtener TODOS los compartimentos y sub-compartimentos
+      oracle.oci.oci_identity_compartment_facts:
+        parent_compartment_id: "{{ tenancy_ocid }}"
+        access_level: "ANY"
+        compartment_id_in_subtree: true
+      register: all_compartments_result
+
+    - name: Paso 2 - Crear un mapa de ID de compartimento a Nombre
+      ansible.builtin.set_fact:
+        compartment_name_map: "{{ all_compartments_result.compartments | items2dict(key_name='id', value_name='name') }}"
+      run_once: true
+
+    - name: Paso 3 - Crear el archivo CSV y escribir la cabecera
+      ansible.builtin.copy:
+        dest: "{{ output_csv_file }}"
+        content: "Compartment_Name,DB_System_Name,DB_System_OCID,DB_System_State,Shape,OCPU_Count,Memory_GB,Node_Hostname,Node_IP_Address,Node_VNIC_OCID,Parent_Database_Name,Parent_Database_OCID,Parent_Database_State,Parent_Database_Is_CDB,Parent_Database_Workload,PDB_Name,PDB_OCID,PDB_State,PDB_Open_Mode"
+        force: yes
+      run_once: true
+
+    - name: Paso 4 - Recorrer cada compartimento para encontrar DB Systems
+      # El bucle principal empieza aquí, buscando los sistemas de base de datos.
+      oracle.oci.oci_database_db_system_facts:
+        compartment_id: "{{ compartment.id }}"
+      loop: "{{ all_compartments_result.compartments }}"
+      loop_control:
+        loop_var: compartment
+      register: db_systems_data
+
+    - name: Paso 5 - Procesar cada DB System y sus componentes internos
+      # Este es el bloque principal que procesa los resultados del paso anterior.
+      ansible.builtin.include_tasks: process_db_system.yml
+      loop: "{{ db_systems_data.results | map(attribute='db_systems') | flatten }}"
+      loop_control:
+        loop_var: db_system

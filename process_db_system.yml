@@ -1,0 +1,102 @@
+---
+# Este archivo es llamado por el playbook principal para procesar cada DB System encontrado.
+
+- name: Obtener los Nodos del DB System
+  oracle.oci.oci_database_db_node_facts:
+    compartment_id: "{{ db_system.compartment_id }}"
+    db_system_id: "{{ db_system.id }}"
+  register: db_nodes_data
+
+- name: Paso Intermedio - Obtener los DB Homes dentro del DB System
+  oracle.oci.oci_database_db_home_facts:
+    compartment_id: "{{ db_system.compartment_id }}"
+    db_system_id: "{{ db_system.id }}"
+  register: db_homes_data
+
+- name: Obtener las Bases de Datos (CDBs) para cada DB Home
+  oracle.oci.oci_database_database_facts:
+    compartment_id: "{{ db_system.compartment_id }}"
+    db_home_id: "{{ item.id }}"
+  loop: "{{ db_homes_data.db_homes }}"
+  register: databases_data_list
+
+- name: Unificar la lista de todas las bases de datos encontradas
+  ansible.builtin.set_fact:
+    all_databases_in_system: "{{ databases_data_list.results | map(attribute='databases') | flatten }}"
+
+- name: Procesar cada Nodo y Base de Datos encontrada
+  block:
+    - name: Para cada Nodo, obtener su IP
+      oracle.oci.oci_network_vnic_facts:
+        vnic_id: "{{ db_node.vnic_id }}"
+      loop: "{{ db_nodes_data.db_nodes }}"
+      loop_control:
+        loop_var: db_node
+      register: vnic_data_list
+
+    - name: Para cada Base de Datos (CDB), buscar sus PDBs
+      oracle.oci.oci_database_pluggable_database_facts:
+        database_id: "{{ cdb.id }}"
+      loop: "{{ all_databases_in_system }}"
+      loop_control:
+        loop_var: cdb
+      register: pdbs_data_list
+
+    - name: Escribir una fila por cada PDB encontrada
+      ansible.builtin.lineinfile:
+        path: "{{ output_csv_file }}"
+        line: >-
+          {{ compartment_name_map[db_system.compartment_id] | default('N/A') }},
+          {{ db_system.display_name | default('N/A') }},
+          {{ db_system.id | default('N/A') }},
+          {{ db_system.lifecycle_state | default('N/A') }},
+          {{ db_system.shape | default('N/A') }},
+          {{ db_system.cpu_core_count | default('N/A') }},
+          {{ db_system.memory_size_in_gbs | default('N/A') }},
+          {{ db_nodes_data.db_nodes[0].hostname | default('N/A') }},
+          {{ vnic_data_list.results[0].vnic.private_ip | default('N/A') }},
+          {{ db_nodes_data.db_nodes[0].vnic_id | default('N/A') }},
+          {{ cdb.cdb.db_name | default('N/A') }},
+          {{ cdb.cdb.id | default('N/A') }},
+          {{ cdb.cdb.lifecycle_state | default('N/A') }},
+          {{ cdb.cdb.is_cdb | default('N/A') }}, 
+          {{ cdb.cdb.db_workload | default('N/A') }},
+          {{ pdb.pdb_name | default('N/A') }},
+          {{ pdb.id | default('N/A') }},
+          {{ pdb.lifecycle_state | default('N/A') }},
+          {{ pdb.open_mode | default('N/A') }}
+      loop: "{{ pdbs_data_list.results | subelements('pluggable_databases') }}"
+      loop_control:
+        loop_var: pdb_item
+      vars:
+        cdb: "{{ pdb_item.0 }}"
+        pdb: "{{ pdb_item.1 }}"
+
+    - name: Escribir una fila para CDBs que no tienen PDBs
+      ansible.builtin.lineinfile:
+        path: "{{ output_csv_file }}"
+        line: >-
+          {{ compartment_name_map[db_system.compartment_id] | default('N/A') }},
+          {{ db_system.display_name | default('N/A') }},
+          {{ db_system.id | default('N/A') }},
+          {{ db_system.lifecycle_state | default('N/A') }},
+          {{ db_system.shape | default('N/A') }},
+          {{ db_system.cpu_core_count | default('N/A') }},
+          {{ db_system.memory_size_in_gbs | default('N/A') }},
+          {{ db_nodes_data.db_nodes[0].hostname | default('N/A') }},
+          {{ vnic_data_list.results[0].vnic.private_ip | default('N/A') }},
+          {{ db_nodes_data.db_nodes[0].vnic_id | default('N/A') }},
+          {{ cdb.db_name | default('N/A') }},
+          {{ cdb.id | default('N/A') }},
+          {{ cdb.lifecycle_state | default('N/A') }},
+          {{ cdb.is_cdb | default('N/A') }}, 
+          {{ cdb.db_workload | default('N/A') }},
+          N/A,N/A,N/A,N/A
+      loop: "{{ pdbs_data_list.results }}"
+      loop_control:
+        loop_var: cdb_item
+      vars:
+        cdb: "{{ cdb_item.cdb }}" 
+      when: cdb_item.pluggable_databases | length == 0
+
+  when: (db_nodes_data.db_nodes | length > 0) and (db_homes_data.db_homes | length > 0)
