@@ -28,7 +28,6 @@
       run_once: true
 
     - name: Paso 4 - Recorrer cada compartimento para encontrar DB Systems
-      # El bucle principal empieza aquí, buscando los sistemas de base de datos.
       oracle.oci.oci_database_db_system_facts:
         compartment_id: "{{ compartment.id }}"
       loop: "{{ all_compartments_result.compartments }}"
@@ -37,7 +36,6 @@
       register: db_systems_data
 
     - name: Paso 5 - Procesar cada DB System y sus componentes internos
-      # Este es el bloque principal que procesa los resultados del paso anterior.
       ansible.builtin.include_tasks: process_db_system.yml
       loop: "{{ db_systems_data.results | map(attribute='db_systems') | flatten }}"
       loop_control:
